@@ -1,0 +1,24 @@
+## .NET / Visual Studio
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+
+# Build artifacts
+publish/
+*.zip
+
+# Misc
+*.log
+Thumbs.db
