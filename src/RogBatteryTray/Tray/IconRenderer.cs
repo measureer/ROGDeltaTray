@@ -10,7 +10,7 @@ public static class IconRenderer
     private static readonly Color LowColor = Color.FromArgb(198, 40, 40);     // red
     private static readonly Color OfflineColor = Color.FromArgb(117, 117, 117); // gray
 
-    public static Icon Render(BatteryState state)
+    public static Icon Render(BatteryState state, int lowThreshold = 20)
     {
         const int size = 32;
         using var bmp = new Bitmap(size, size);
@@ -21,7 +21,7 @@ public static class IconRenderer
             g.Clear(Color.Transparent);
 
             bool online = state.Connected && state.Percent != null;
-            Color bg = !online ? OfflineColor : state.Percent!.Value <= 20 ? LowColor : OkColor;
+            Color bg = !online ? OfflineColor : state.Percent!.Value <= lowThreshold ? LowColor : OkColor;
             string text = online ? state.Percent!.Value.ToString() : "×";
 
             using (var brush = new SolidBrush(bg))

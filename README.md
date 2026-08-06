@@ -26,7 +26,7 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 
 - **托盘图标实时显示电量数字** / Battery percentage rendered into the tray icon
   - 连接时每 5 秒刷新；断开后改为每 2 秒探测，开机立刻能被发现（连接状态下轮询间隔 5s，断开状态 2s）
-  - 电量 ≤20% 图标变红；耳机关机/断开显示灰色 ✕
+  - 电量低于阈值（默认 20%）图标变红；耳机关机/断开显示灰色 ✕
   - 连续 3 次查询失败才判定为断开，单次链路抖动不会误报（去抖）
   - Refreshes every 5 s while connected (2 s while disconnected, so power-on is detected quickly); icon turns red at ≤ 20 % and shows a grey ✕ when disconnected; 3 consecutive failed polls are required before treating the headset as disconnected (debounce against transient link hiccups)
 - **自动切换声音输入输出** / Automatic audio device switching
@@ -34,8 +34,11 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
   - 耳机关机 → 切回之前的音箱/麦克风（切换前的默认设备会被记住）
   - 通过 `IPolicyConfig` 设置 Windows 默认音频端点；可在右键菜单关闭此功能
   - Headset on → default playback *and* recording endpoints switch to ROG Delta II; headset off → switch back to your previously remembered devices (via `IPolicyConfig`); can be disabled from the tray menu
-- **右键菜单** / Tray menu：查看电量、立即刷新、开关自动切换、开关开机自启、退出
-- **低电量气泡提醒** / Low-battery balloon notification at ≤ 20 %（电量回升后重置，会再次提醒）
+- **右键菜单** / Tray menu：查看电量、续航估算、立即刷新、低电量阈值、开关连接提示、开关自动切换、固定回切设备、开关开机自启、退出
+- **低电量提醒** / Low-battery alerts：阈值可在菜单配置（10–30%），≤阈值 / ≤10% / ≤5% 分级各提醒一次，电量回升后重新武装（Configurable threshold 10–30 %; tiered alerts at threshold / 10 % / 5 %, re-armed once the battery rises again）
+- **续航估算** / Runtime estimate：记录电量采样（仅存变化点和心跳，保留 7 天、上限 2000 条，约 60 KB），菜单显示预计剩余可用时间（Samples recorded only on change or 30-min heartbeat, kept 7 days / ≤ 2000 entries ≈ 60 KB; menu shows estimated remaining runtime）
+- **连接/断开气泡提示** / Connect/disconnect balloon notification（可在菜单关闭，左键点击图标查看电量详情）
+- **固定回切设备** / Fixed fallback audio device：耳机关机后可固定回切到指定音箱/麦克风，而非仅自动记忆（可在「回切播放/录音设备」子菜单选择）
 - **可选开机自启** / Optional auto-start with Windows（写注册表 `Run` 键，仅当前用户）
 
 ## 下载与使用 / Download & Usage
