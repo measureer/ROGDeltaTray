@@ -27,18 +27,31 @@ CC 12 07 00 00 05 <percent> <lowBattThreshold> 01 00 ...
 ```
 
 - `[1]=0x12 [2]=0x07`：命令回显，用于校验
+- `[5]`：睡眠定时器（分钟）。实测 0x05，对应驱动里的"5 分钟无操作休眠"设置（g-helper 同此解读）
 - `[6]`：电量百分比（0–100）。实测 0x4F=79、0x4E=78 与驱动显示一致
 - `[7]`：低电量警告阈值（实测 0x1E=30，对应驱动里的低电提醒设置）
-- `[8]`：恒为 0x01（含义未确定；插拔充电器不变，**不是**充电标志）
+- `[8]`：低电量语音提示开关（0x01=开；g-helper 称之为 lowBatteryPrompt，**不是**充电标志）
 - 耳机关机/休眠时：查询超时或返回无效值 → 视为未连接
+- 固件 NAK：响应 `[1]=0xFF [2]=0xAA`（或 `[5]=0xFF [6]=0xAA`）表示命令被拒绝
+- 接收器会主动推异步事件包（`[1][2]` 不是命令回显），读取时需跳过
 
 发送方式：对 COL04 接口 `WriteFile`（中断 OUT）后用 `ReadFile`（中断 IN）读响应，
 **不需要** `HidD_GetInputReport`。查询/响应与 g-helper 中 ROG 鼠标的 `12 07` 电池查询同族。
+发送前应先清空输入队列里的残留报告（g-helper 的 Drain），否则容易读到上一次的旧响应。
 
-## 充电状态（未解决）
+## 充电状态（已通过 g-helper 解决）
 
-`12 07` 响应在插/拔充电器时没有字节变化。充电状态可能走 COL02 的 RACE 指示
-（ASUS 应用层事件 `CHARGING:13 / BATTERY_PERCENT:14`），待后续逆向。
+单独发送 `CC 12 08` 查询，响应 `[5]==1` 表示充电中（g-helper `AsusHeadset.ReadBattery` /
+`ParseCharging` 在 Delta II 上量产验证）。`12 07` 响应本身确实不含充电标志。
+
+实测（耳机开机、未插充电器）：`CC 12 08 00 00 00 00 ...`（`[5]=0`）；耳机关机时
+`12 07` / `12 08` 均返回 NAK（`[5]=0xFF [6]=0xAA`），这是"接收器在线、耳机关机"的判别特征。
+
+## 接口识别（g-helper 方式）
+
+不依赖 Windows 路径里的 `col04` 后缀：按 VID/PID 枚举后，用
+`GetMaxOutputReportLength() >= 64` 且报告描述符中含 usage page 0xFF00 的 collection 来定位。
+插拔检测可用 HidSharp `DeviceList.Local.Changed`（底层 WM_DEVICECHANGE）事件驱动，无需纯轮询。
 
 ## RACE 通道（COL02，报告 0x06/0x07，备查）
 

@@ -16,6 +16,7 @@ public sealed class TrayAppContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly IBatterySource _source;
+    private readonly Control _invoker = new();   // marshals device-change events to the UI thread
     private readonly AudioDeviceManager _audio = new();
     private readonly BatteryHistory _history = new();
     private readonly ContextMenuStrip _menu;
@@ -104,7 +105,20 @@ public sealed class TrayAppContext : ApplicationContext
         _timer.Tick += (_, _) => Refresh();
         _timer.Start();
 
+        _ = _invoker.Handle;   // force handle creation on the UI thread
+        _source.DeviceChanged += OnDeviceChanged;
+
         Refresh();
+    }
+
+    private void OnDeviceChanged(object? sender, EventArgs e)
+    {
+        // Raised from HidSharp's watcher thread — refresh immediately on the UI
+        // thread so plug/unplug is reflected without waiting for the next poll.
+        if (_invoker.IsDisposed)
+            return;
+        try { _invoker.BeginInvoke(Refresh); }
+        catch (ObjectDisposedException) { }
     }
 
     private void Refresh()
@@ -115,6 +129,7 @@ public sealed class TrayAppContext : ApplicationContext
         // Debounce: a single failed poll is usually a transient link hiccup, not a
         // real power-off. Only treat the headset as disconnected after several
         // consecutive failures; until then keep showing the last good reading.
+        // When the receiver itself is gone there is no ambiguity — disconnect at once.
         BatteryState state;
         if (reading.Connected)
         {
@@ -122,7 +137,7 @@ public sealed class TrayAppContext : ApplicationContext
             _lastGoodState = reading;
             state = reading;
         }
-        else if (++_consecutiveFailures < DisconnectAfterFailures && _lastGoodState != null)
+        else if (reading.DonglePresent && ++_consecutiveFailures < DisconnectAfterFailures && _lastGoodState != null)
         {
             state = _lastGoodState;
         }
@@ -136,9 +151,9 @@ public sealed class TrayAppContext : ApplicationContext
 
         _statusItem.Text = state switch
         {
-            { Connected: false } => "耳机未连接",
-            { Percent: { } p } => $"电量: {p}%" + (state.Charging ? "（充电中）" : ""),
-            _ => "电量: --",
+            { Connected: true, Percent: { } p } => $"电量: {p}%" + (state.Charging ? "（充电中）" : ""),
+            { DonglePresent: true } => "耳机未开机（接收器已连接）",
+            _ => "耳机未连接",
         };
         _notifyIcon.Text = _statusItem.Text;
 
@@ -232,9 +247,16 @@ public sealed class TrayAppContext : ApplicationContext
 
     private void ShowDetails()
     {
-        string text = _currentState is { Connected: true, Percent: { } p }
-            ? $"电量 {p}%\n{_estimateItem.Text}\n上次刷新: {_lastRefreshLocal:HH:mm:ss}"
-            : $"耳机未连接\n上次刷新: {_lastRefreshLocal:HH:mm:ss}";
+        string text = _currentState switch
+        {
+            { Connected: true, Percent: { } p } =>
+                $"电量 {p}%" + (_currentState.Charging ? "（充电中）" : "")
+                + $"\n{_estimateItem.Text}\n上次刷新: {_lastRefreshLocal:HH:mm:ss}",
+            { DonglePresent: true } =>
+                $"耳机未开机（接收器已连接）\n上次刷新: {_lastRefreshLocal:HH:mm:ss}",
+            _ =>
+                $"耳机未连接\n上次刷新: {_lastRefreshLocal:HH:mm:ss}",
+        };
         _notifyIcon.ShowBalloonTip(3000, "ROG 耳机电量", text, ToolTipIcon.Info);
     }
 
@@ -348,10 +370,12 @@ public sealed class TrayAppContext : ApplicationContext
     {
         if (disposing)
         {
+            _source.DeviceChanged -= OnDeviceChanged;
             _timer.Dispose();
             _notifyIcon.Dispose();
             _menu.Dispose();
             _currentIcon?.Dispose();
+            _invoker.Dispose();
             _source.Dispose();
         }
         base.Dispose(disposing);

@@ -25,10 +25,10 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 ## 功能 / Features
 
 - **托盘图标实时显示电量数字** / Battery percentage rendered into the tray icon
-  - 连接时每 5 秒刷新；断开后改为每 2 秒探测，开机立刻能被发现（连接状态下轮询间隔 5s，断开状态 2s）
-  - 电量低于阈值（默认 20%）图标变红；耳机关机/断开显示灰色 ✕
-  - 连续 3 次查询失败才判定为断开，单次链路抖动不会误报（去抖）
-  - Refreshes every 5 s while connected (2 s while disconnected, so power-on is detected quickly); icon turns red at ≤ 20 % and shows a grey ✕ when disconnected; 3 consecutive failed polls are required before treating the headset as disconnected (debounce against transient link hiccups)
+  - 连接时每 5 秒刷新；接收器插拔由 `WM_DEVICECHANGE` 事件即时感知，无需等待轮询（断开后保留每 2 秒探测作为兜底，耳机开机立刻能被发现）
+  - 电量低于阈值（默认 20%）图标变红；耳机关机/断开显示灰色 ✕；菜单可区分「接收器未插」与「耳机未开机」两种状态
+  - 查询前先清空输入队列、跳过接收器主动推送的异步事件包、识别固件 NAK（参考 g-helper 的 `WriteForResponse`），单次链路抖动不会误报； dongle 仍在时连续 3 次查询失败才判定耳机断开（去抖）
+  - Refreshes every 5 s while connected; receiver plug/unplug is detected instantly via `WM_DEVICECHANGE` events (2 s polling kept as a fallback so power-on is caught quickly); icon turns red at ≤ 20 % and shows a grey ✕ when disconnected; the menu distinguishes "receiver unplugged" from "headset powered off"; stale-report draining, async-event filtering and firmware-NAK handling (from g-helper's `WriteForResponse`) keep single link hiccups from causing false disconnects
 - **自动切换声音输入输出** / Automatic audio device switching
   - 耳机开机 → 默认播放 + 录音设备切到 ROG Delta II
   - 耳机关机 → 切回之前的音箱/麦克风（切换前的默认设备会被记住）
@@ -43,7 +43,7 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 
 ## 下载与使用 / Download & Usage
 
-1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载 `ROGDeltaTray-v0.1.0-win-x64.zip`
+1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载 `ROGDeltaTray-v0.3.0-win-x64.zip`
 2. 解压，双击 `RogBatteryTray.exe` 即可（单文件自包含，**无需安装 .NET 运行时**）
 3. 建议配合右键菜单里的「开机启动」使用
 
@@ -66,13 +66,13 @@ dotnet publish src/RogBatteryTray -c Release -r win-x64 --self-contained -p:Publ
 
 ## 原理 / How it works
 
-不依赖 Armoury Crate，直接通过 USB HID 与 2.4G 接收器通信：向接收器的 vendor-defined 接口（COL04，报告 `0xCC`）发送 ASUS 外设统一查询命令 `CC 12 07`（与 ROG 鼠标的 `12 07` 电量查询同族），响应第 6 字节即电量百分比（0–100），第 7 字节是驱动里设置的低电量警告阈值。耳机关机时查询超时，据此判断连接状态。
+不依赖 Armoury Crate，直接通过 USB HID 与 2.4G 接收器通信：向接收器的 vendor-defined 接口（usage page `0xFF00`，报告 `0xCC`，按报告描述符识别而非依赖 `col04` 路径名）发送 ASUS 外设统一查询命令 `CC 12 07`（与 ROG 鼠标/耳机的 `12 07` 电量查询同族），响应第 6 字节即电量百分比（0–100），第 7 字节是驱动里设置的低电量警告阈值；充电状态由单独的 `CC 12 08` 查询获得（第 5 字节为 1 即充电中，同 g-helper）。耳机关机时查询超时，据此判断连接状态。
 
 音频切换部分使用 Windows Core Audio API 枚举端点，并通过未公开但广泛使用的 `IPolicyConfig` COM 接口设置默认设备。
 
 完整逆向过程与协议细节（含 RACE 通道、各 HID collection 布局）见 [docs/protocol.md](docs/protocol.md)。
 
-The app talks directly to the 2.4 GHz dongle over USB HID instead of relying on Armoury Crate: it sends the ASUS peripheral unified query `CC 12 07` (same family as the ROG mouse battery query) to the dongle's vendor-defined interface (COL04, report `0xCC`); byte 6 of the response is the battery percentage (0–100) and byte 7 is the low-battery warning threshold configured in the driver. Queries time out when the headset is off, which is how the connection state is detected.
+The app talks directly to the 2.4 GHz dongle over USB HID instead of relying on Armoury Crate: it sends the ASUS peripheral unified query `CC 12 07` (same family as the ROG mouse/headset battery query) to the dongle's vendor-defined interface (usage page `0xFF00`, report `0xCC`, identified by its report descriptor rather than the `col04` path name); byte 6 of the response is the battery percentage (0–100) and byte 7 is the low-battery warning threshold configured in the driver. Charging state comes from a separate `CC 12 08` query (byte 5 == 1 means charging, same as g-helper). Queries time out when the headset is off, which is how the connection state is detected.
 
 Audio switching enumerates endpoints with the Windows Core Audio API and sets the defaults through the undocumented but widely used `IPolicyConfig` COM interface.
 
@@ -87,7 +87,6 @@ See [docs/protocol.md](docs/protocol.md) for the full reverse-engineering notes 
 
 ## 已知限制 / Known limitations
 
-- **充电状态标志未破解**：`12 07` 响应在插/拔充电器时没有字节变化，托盘暂不显示「充电中」（推测走 RACE 指示，见协议文档，欢迎 PR）
 - **仅适配 ROG Delta II**（`VID 0B05 / PID 1AFA`）；同架构的 ROG Cetra SpeedNova（`PID 1AD3`）很可能通用但未经实测，其他型号需按 [docs/protocol.md](docs/protocol.md) 的方法重新确认
 - 蓝牙耳机模式下无法查询电量（协议走 2.4G 接收器）
 
