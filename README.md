@@ -1,5 +1,7 @@
 # ROGDeltaTray
 
+<p align="center"><img src="assets/icon.png" width="128" alt="ROGDeltaTray icon"></p>
+
 在 Windows 任务栏托盘直接显示 **ROG Delta II（棱镜 2）** 耳机的实时电量——无需安装/运行 Armoury Crate。
 
 A lightweight Windows tray app that shows your **ASUS ROG Delta II** headset's battery level right in the system tray — no Armoury Crate required.
@@ -43,7 +45,7 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 
 ## 下载与使用 / Download & Usage
 
-1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载 `ROGDeltaTray-v0.3.1-win-x64.zip`
+1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载 `ROGDeltaTray-v0.3.2-win-x64.zip`
 2. 解压，双击 `RogBatteryTray.exe` 即可（单文件自包含，**无需安装 .NET 运行时**）
 3. 建议配合右键菜单里的「开机启动」使用
 
