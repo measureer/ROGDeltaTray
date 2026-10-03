@@ -129,7 +129,8 @@ public sealed class TrayAppContext : ApplicationContext
         // Debounce: a single failed poll is usually a transient link hiccup, not a
         // real power-off. Only treat the headset as disconnected after several
         // consecutive failures; until then keep showing the last good reading.
-        // When the receiver itself is gone there is no ambiguity — disconnect at once.
+        // Two cases skip the debounce: the receiver itself is gone, or the dongle
+        // NAKed the query — both are definitive, not hiccups.
         BatteryState state;
         if (reading.Connected)
         {
@@ -137,7 +138,8 @@ public sealed class TrayAppContext : ApplicationContext
             _lastGoodState = reading;
             state = reading;
         }
-        else if (reading.DonglePresent && ++_consecutiveFailures < DisconnectAfterFailures && _lastGoodState != null)
+        else if (reading is { DonglePresent: true, HeadsetOff: false }
+                 && ++_consecutiveFailures < DisconnectAfterFailures && _lastGoodState != null)
         {
             state = _lastGoodState;
         }

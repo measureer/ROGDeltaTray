@@ -27,8 +27,8 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 - **托盘图标实时显示电量数字** / Battery percentage rendered into the tray icon
   - 连接时每 5 秒刷新；接收器插拔由 `WM_DEVICECHANGE` 事件即时感知，无需等待轮询（断开后保留每 2 秒探测作为兜底，耳机开机立刻能被发现）
   - 电量低于阈值（默认 20%）图标变红；耳机关机/断开显示灰色 ✕；菜单可区分「接收器未插」与「耳机未开机」两种状态
-  - 查询前先清空输入队列、跳过接收器主动推送的异步事件包、识别固件 NAK（参考 g-helper 的 `WriteForResponse`），单次链路抖动不会误报； dongle 仍在时连续 3 次查询失败才判定耳机断开（去抖）
-  - Refreshes every 5 s while connected; receiver plug/unplug is detected instantly via `WM_DEVICECHANGE` events (2 s polling kept as a fallback so power-on is caught quickly); icon turns red at ≤ 20 % and shows a grey ✕ when disconnected; the menu distinguishes "receiver unplugged" from "headset powered off"; stale-report draining, async-event filtering and firmware-NAK handling (from g-helper's `WriteForResponse`) keep single link hiccups from causing false disconnects
+  - 查询前先清空输入队列、跳过接收器主动推送的异步事件包、识别固件 NAK（参考 g-helper 的 `WriteForResponse`），单次链路抖动不会误报；接收器收到 NAK（耳机关机的确定性应答）时立即判定断开并回切音频，仅在原因不明的失败时才需要连续 3 次去抖
+  - Refreshes every 5 s while connected; receiver plug/unplug is detected instantly via `WM_DEVICECHANGE` events (2 s polling kept as a fallback so power-on is caught quickly); icon turns red at ≤ 20 % and shows a grey ✕ when disconnected; the menu distinguishes "receiver unplugged" from "headset powered off"; stale-report draining, async-event filtering and firmware-NAK handling (from g-helper's `WriteForResponse`) keep single link hiccups from causing false disconnects; a NAK (the dongle's definitive "headset off" answer) triggers an immediate disconnect/audio switch-back, while only unexplained failures go through the 3-strike debounce
 - **自动切换声音输入输出** / Automatic audio device switching
   - 耳机开机 → 默认播放 + 录音设备切到 ROG Delta II
   - 耳机关机 → 切回之前的音箱/麦克风（切换前的默认设备会被记住）
@@ -43,7 +43,7 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 
 ## 下载与使用 / Download & Usage
 
-1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载 `ROGDeltaTray-v0.3.0-win-x64.zip`
+1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载 `ROGDeltaTray-v0.3.1-win-x64.zip`
 2. 解压，双击 `RogBatteryTray.exe` 即可（单文件自包含，**无需安装 .NET 运行时**）
 3. 建议配合右键菜单里的「开机启动」使用
 

@@ -64,7 +64,9 @@ public sealed class HidBatterySource : IBatterySource
     {
         try
         {
-            var response = WriteForResponse(0x12, 0x07);
+            var (response, nak) = WriteForResponse(0x12, 0x07);
+            if (nak)
+                return BatteryState.HeadsetOffState;   // definitive answer — caller skips retries
             if (response == null)
                 return null;
 
@@ -73,11 +75,11 @@ public sealed class HidBatterySource : IBatterySource
                 return null;   // dongle present but headset off/asleep
 
             bool charging = false;
-            var chargeResponse = WriteForResponse(0x12, 0x08);
+            var (chargeResponse, _) = WriteForResponse(0x12, 0x08);
             if (chargeResponse != null)
                 charging = chargeResponse[5] == 1;
 
-            return new BatteryState(percent, charging, Connected: true, DonglePresent: true);
+            return new BatteryState(percent, charging, Connected: true, DonglePresent: true, HeadsetOff: false);
         }
         catch
         {
@@ -90,13 +92,14 @@ public sealed class HidBatterySource : IBatterySource
     /// Writes a command and reads until its echo comes back, g-helper style:
     /// the input queue is drained first (stale reports would otherwise be mistaken
     /// for the response), async event packets pushed by the dongle are skipped,
-    /// and the firmware NAK (FF AA) is recognized.
+    /// and the firmware NAK (FF AA) is reported separately — for the battery query
+    /// a NAK is the dongle's definitive "headset is off" answer.
     /// </summary>
-    private byte[]? WriteForResponse(byte cmd1, byte cmd2)
+    private (byte[]? Response, bool Nak) WriteForResponse(byte cmd1, byte cmd2)
     {
         var stream = EnsureOpen();
         if (stream == null)
-            return null;
+            return (null, false);
 
         Drain(stream);
 
@@ -113,16 +116,16 @@ public sealed class HidBatterySource : IBatterySource
             if (n < 3 || inBuf[0] != ReportId)
                 continue;
             if (inBuf[1] == 0xFF && inBuf[2] == 0xAA)
-                return null;   // firmware NAK
+                return (null, true);   // firmware NAK
             if (inBuf[1] == cmd1 && inBuf[2] == cmd2)
             {
                 if (inBuf[5] == 0xFF && inBuf[6] == 0xAA)
-                    return null;   // NAK payload
-                return inBuf;
+                    return (null, true);   // NAK payload (headset off)
+                return (inBuf, false);
             }
             // Non-matching echo: an async event report — keep reading.
         }
-        return null;
+        return (null, false);
     }
 
     /// <summary>Flush pending input reports so the next read returns a fresh response.</summary>
