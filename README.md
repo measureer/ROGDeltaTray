@@ -28,33 +28,44 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 
 - **托盘图标实时显示电量数字** / Battery percentage rendered into the tray icon
   - 连接时每 5 秒刷新；接收器插拔由 `WM_DEVICECHANGE` 事件即时感知，无需等待轮询（断开后保留每 2 秒探测作为兜底，耳机开机立刻能被发现）
-  - 电量低于阈值（默认 20%）图标变红；耳机关机/断开显示灰色 ✕；菜单可区分「接收器未插」与「耳机未开机」两种状态
+  - 电量低于阈值（默认 20%）图标变红；耳机关机/断开显示灰色 ✕（接收器还在时右上角多一个琥珀色待机点，一眼区分「该开耳机」和「该插接收器」）；菜单可区分「接收器未插」与「耳机未开机」两种状态
   - 查询前先清空输入队列、跳过接收器主动推送的异步事件包、识别固件 NAK（参考 g-helper 的 `WriteForResponse`），单次链路抖动不会误报；接收器收到 NAK（耳机关机的确定性应答）时立即判定断开并回切音频，仅在原因不明的失败时才需要连续 3 次去抖
-  - Refreshes every 5 s while connected; receiver plug/unplug is detected instantly via `WM_DEVICECHANGE` events (2 s polling kept as a fallback so power-on is caught quickly); icon turns red at ≤ 20 % and shows a grey ✕ when disconnected; the menu distinguishes "receiver unplugged" from "headset powered off"; stale-report draining, async-event filtering and firmware-NAK handling (from g-helper's `WriteForResponse`) keep single link hiccups from causing false disconnects; a NAK (the dongle's definitive "headset off" answer) triggers an immediate disconnect/audio switch-back, while only unexplained failures go through the 3-strike debounce
+  - HID 查询在后台线程执行，链路抖动时托盘菜单和通知不会卡死；图标按当前 DPI 的实际托盘尺寸渲染
+  - Refreshes every 5 s while connected; receiver plug/unplug is detected instantly via `WM_DEVICECHANGE` events (2 s polling kept as a fallback so power-on is caught quickly); icon turns red at ≤ 20 % and shows a grey ✕ when disconnected (with an amber standby dot when the receiver is still plugged in, so "power on the headset" is distinguishable from "plug in the receiver" at a glance); the menu distinguishes "receiver unplugged" from "headset powered off"; stale-report draining, async-event filtering and firmware-NAK handling (from g-helper's `WriteForResponse`) keep single link hiccups from causing false disconnects; a NAK (the dongle's definitive "headset off" answer) triggers an immediate disconnect/audio switch-back, while only unexplained failures go through the 3-strike debounce
+  - HID queries run on a background thread so a flaky link never freezes the tray menu; icons render at the real tray size for the current DPI
 - **自动切换声音输入输出** / Automatic audio device switching
-  - 耳机开机 → 默认播放 + 录音设备切到 ROG Delta II
-  - 耳机关机 → 切回之前的音箱/麦克风（切换前的默认设备会被记住）
-  - 通过 `IPolicyConfig` 设置 Windows 默认音频端点；可在右键菜单关闭此功能
-  - Headset on → default playback *and* recording endpoints switch to ROG Delta II; headset off → switch back to your previously remembered devices (via `IPolicyConfig`); can be disabled from the tray menu
-- **右键菜单** / Tray menu：查看电量、续航估算、立即刷新、低电量阈值、开关连接提示、开关自动切换、固定回切设备、开关开机自启、退出
+  - 耳机开机 → 默认播放 + 录音设备切到 ROG 耳机（端点未就绪时自动重试几次）
+  - 耳机关机 → 切回之前的音箱/麦克风（切换前的默认设备会被记住，含通信设备角色）
+  - 耳机端点按设备实例 ID 里的 VID/PID 识别（重命名设备也不怕），通过 `IPolicyConfig` 设置 Windows 默认音频端点；可在右键菜单关闭此功能
+  - Headset on → default playback *and* recording endpoints switch to the ROG headset (retries automatically while the endpoints register); headset off → switch back to your previously remembered devices, including the communications role (via `IPolicyConfig`); headset endpoints are recognized by the VID/PID in their device instance id, so renaming the device doesn't break detection; can be disabled from the tray menu
+- **右键菜单** / Tray menu：查看电量、续航估算、立即刷新、低电量阈值、开关连接提示、开关自动切换、固定回切设备、开关开机自启、切换语言、退出
+- **中英文界面** / Chinese & English UI：默认跟随 Windows 显示语言，可在「语言 / Language」子菜单手动切换，即时生效（Follows the Windows display language by default; can be overridden in the Language submenu, takes effect immediately）
 - **低电量提醒** / Low-battery alerts：阈值可在菜单配置（10–30%），≤阈值 / ≤10% / ≤5% 分级各提醒一次，电量回升后重新武装（Configurable threshold 10–30 %; tiered alerts at threshold / 10 % / 5 %, re-armed once the battery rises again）
-- **续航估算** / Runtime estimate：记录电量采样（仅存变化点和心跳，保留 7 天、上限 2000 条，约 60 KB），菜单显示预计剩余可用时间（Samples recorded only on change or 30-min heartbeat, kept 7 days / ≤ 2000 entries ≈ 60 KB; menu shows estimated remaining runtime）
+- **续航/充电估算** / Runtime & charge estimates：记录电量采样（仅存变化点和心跳，保留 7 天、上限 2000 条，约 60 KB），菜单显示预计剩余可用时间；充电时反向估算预计充满时间，放电速率不受充电段干扰（Samples recorded only on change or 30-min heartbeat, kept 7 days / ≤ 2000 entries ≈ 60 KB; menu shows estimated remaining runtime, or time-to-full while charging; charge sessions don't pollute the measured drain rate）
 - **连接/断开气泡提示** / Connect/disconnect balloon notification（可在菜单关闭，左键点击图标查看电量详情）
 - **固定回切设备** / Fixed fallback audio device：耳机关机后可固定回切到指定音箱/麦克风，而非仅自动记忆（可在「回切播放/录音设备」子菜单选择）
+- **对外输出电量状态** / Battery state for external tools：
+  - 状态实时写入 `%APPDATA%\RogBatteryTray\status.json`（连接状态、电量、充电中、预计剩余分钟数、更新时间），Rainmeter / Stream Deck / AutoHotkey 等可直接读取
+  - 命令行运行 `RogBatteryTray.exe --query` 立即查询一次并以 JSON 打印（退出码：0 已连接 / 1 错误 / 2 未连接）
+  - Live state is written to `%APPDATA%\RogBatteryTray\status.json` (connected, percent, charging, estimated remaining minutes, timestamp) for Rainmeter / Stream Deck / AutoHotkey etc.; `RogBatteryTray.exe --query` prints the same JSON once and exits (exit code: 0 connected / 1 error / 2 not connected)
 - **可选开机自启** / Optional auto-start with Windows（写注册表 `Run` 键，仅当前用户）
 
 ## 下载与使用 / Download & Usage
 
-1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载 `ROGDeltaTray-v0.3.2-win-x64.zip`
-2. 解压，双击 `RogBatteryTray.exe` 即可（单文件自包含，**无需安装 .NET 运行时**）
-3. 建议配合右键菜单里的「开机启动」使用
+1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载，二选一：
+   - `ROGDeltaTray-v0.4.0-win-x64.exe` — **单文件自包含版（推荐）**，无需安装 .NET 运行时
+   - `ROGDeltaTray-v0.4.0-win-x64-framework-dependent.exe` — 框架依赖版，体积小，但需要系统已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
+2. 双击运行即可，建议配合右键菜单里的「开机启动」使用
 
-Download the zip from [Releases](https://github.com/measureer/ROGDeltaTray/releases), extract, and double-click `RogBatteryTray.exe`. It is a single self-contained file — no .NET runtime installation needed. Enabling "开机启动" (auto-start) from the tray menu is recommended.
+Download one of the exes from [Releases](https://github.com/measureer/ROGDeltaTray/releases): `...-win-x64.exe` is self-contained (recommended, no .NET install needed); `...-framework-dependent.exe` is smaller but requires the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0). Double-click to run — enabling "开机启动" (auto-start) from the tray menu is recommended.
 
 ## 系统要求 / Requirements
 
 - Windows 10 / 11（x64）
 - ASUS ROG Delta II 耳机（接收器 `VID 0B05 / PID 1AFA`），通过 **2.4G 无线接收器** 连接（蓝牙模式下无法查询）
+- 同协议族的 ROG Cetra SpeedNova（`PID 1AD3`）也会自动尝试，未经实测，欢迎反馈
+
+  The ROG Cetra SpeedNova (`PID 1AD3`, same protocol family) is probed automatically too — unverified, feedback welcome.
 
 ## 自行构建 / Build from source
 
@@ -89,8 +100,10 @@ See [docs/protocol.md](docs/protocol.md) for the full reverse-engineering notes 
 
 ## 已知限制 / Known limitations
 
-- **仅适配 ROG Delta II**（`VID 0B05 / PID 1AFA`）；同架构的 ROG Cetra SpeedNova（`PID 1AD3`）很可能通用但未经实测，其他型号需按 [docs/protocol.md](docs/protocol.md) 的方法重新确认
+- **实测仅 ROG Delta II**（`VID 0B05 / PID 1AFA`）；ROG Cetra SpeedNova（`PID 1AD3`）按同协议族自动适配但未经实测，其他型号需按 [docs/protocol.md](docs/protocol.md) 的方法重新确认
 - 蓝牙耳机模式下无法查询电量（协议走 2.4G 接收器）
+- Only the ROG Delta II (`VID 0B05 / PID 1AFA`) is verified on real hardware; the ROG Cetra SpeedNova (`PID 1AD3`) is auto-detected as a same-family device but untested. Other models need re-verification per [docs/protocol.md](docs/protocol.md)
+- Battery query does not work over Bluetooth (the protocol goes through the 2.4 GHz dongle)
 
 ## 致谢 / Acknowledgements
 

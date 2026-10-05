@@ -55,6 +55,27 @@ public static class Settings
         set => Set("PrevCaptureId", value);
     }
 
+    /// <summary>Default communications render endpoint id remembered before switching.</summary>
+    public static string? PrevRenderCommId
+    {
+        get => Get("PrevRenderCommId", null);
+        set => Set("PrevRenderCommId", value);
+    }
+
+    /// <summary>Default communications capture endpoint id remembered before switching.</summary>
+    public static string? PrevCaptureCommId
+    {
+        get => Get("PrevCaptureCommId", null);
+        set => Set("PrevCaptureCommId", value);
+    }
+
+    /// <summary>UI language: "auto" (follow Windows), "zh", or "en".</summary>
+    public static string Language
+    {
+        get => Get("Language", "auto") ?? "auto";
+        set => Set("Language", value);
+    }
+
     private static string? Get(string name, string? fallback)
     {
         using var key = Registry.CurrentUser.OpenSubKey(KeyPath);

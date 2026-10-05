@@ -3,7 +3,7 @@ using HidSharp;
 namespace RogBatteryTray.Hid;
 
 /// <summary>
-/// Reads battery level from the ROG Delta II 2.4GHz dongle (VID 0B05 / PID 1AFA).
+/// Reads battery level from a supported 2.4GHz dongle (see <see cref="SupportedDevices"/>).
 ///
 /// Protocol (reverse engineered, see docs/protocol.md):
 /// talk to the vendor-defined HID collection (usage page 0xFF00, report id 0xCC),
@@ -15,8 +15,7 @@ namespace RogBatteryTray.Hid;
 /// </summary>
 public sealed class HidBatterySource : IBatterySource
 {
-    public const int Vid = 0x0B05;
-    public const int Pid = 0x1AFA;
+    public const int Vid = SupportedDevices.Vid;
 
     private const byte ReportId = 0xCC;
     private const int VendorUsagePage = 0xFF00;
@@ -148,10 +147,10 @@ public sealed class HidBatterySource : IBatterySource
         }
     }
 
-    /// <summary>The receiver is plugged in (any of its HID collections is enumerated).</summary>
+    /// <summary>Any supported receiver is plugged in (any of its HID collections is enumerated).</summary>
     private bool IsDonglePresent()
     {
-        try { return DeviceList.Local.GetHidDevices(Vid, Pid).Any(); }
+        try { return SupportedDevices.Pids.Any(pid => DeviceList.Local.GetHidDevices(Vid, pid).Any()); }
         catch { return false; }
     }
 
@@ -164,7 +163,8 @@ public sealed class HidBatterySource : IBatterySource
     {
         try
         {
-            foreach (var device in DeviceList.Local.GetHidDevices(Vid, Pid))
+            foreach (int pid in SupportedDevices.Pids)
+            foreach (var device in DeviceList.Local.GetHidDevices(Vid, pid))
             {
                 try
                 {

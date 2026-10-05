@@ -9,6 +9,8 @@ public sealed class TrayAppContext : ApplicationContext
     private const int PollIntervalMs = 5_000;
     private const int DisconnectedPollIntervalMs = 2_000;
     private const int DisconnectAfterFailures = 3;
+    private const int AudioSwitchMaxRetries = 3;
+    private const int AudioSwitchRetryDelayMs = 1_500;
     private const string RunKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValueName = "RogBatteryTray";
     private static readonly int[] ThresholdOptions = { 10, 15, 20, 25, 30 };
@@ -22,12 +24,16 @@ public sealed class TrayAppContext : ApplicationContext
     private readonly ContextMenuStrip _menu;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _estimateItem;
+    private readonly ToolStripMenuItem _refreshItem;
     private readonly ToolStripMenuItem _autoSwitchItem;
     private readonly ToolStripMenuItem _autostartItem;
     private readonly ToolStripMenuItem _notifyConnItem;
     private readonly ToolStripMenuItem _thresholdItem;
     private readonly ToolStripMenuItem _renderFallbackItem;
     private readonly ToolStripMenuItem _captureFallbackItem;
+    private readonly ToolStripMenuItem _languageItem;
+    private readonly ToolStripMenuItem _languageAutoItem;
+    private readonly ToolStripMenuItem _exitItem;
     private readonly HashSet<int> _notifiedTiers = new();
     private Icon? _currentIcon;
     private bool _wasConnected;
@@ -36,33 +42,39 @@ public sealed class TrayAppContext : ApplicationContext
     private DateTime _lastRefreshLocal;
     private BatteryState? _lastGoodState;
     private BatteryState _currentState = BatteryState.Disconnected;
+    private TimeSpan? _lastRemainingEstimate;
+    private bool _refreshInFlight;
+    private bool _disposed;
+    private int _audioSwitchRetries;
 
     public TrayAppContext(IBatterySource? source = null)
     {
         _source = source ?? new HidBatterySource();
 
-        _statusItem = new ToolStripMenuItem("电量: --") { Enabled = false };
-        _estimateItem = new ToolStripMenuItem("耗电速率: 数据收集中") { Enabled = false };
-        _autoSwitchItem = new ToolStripMenuItem("自动切换声音输入输出")
+        _statusItem = new ToolStripMenuItem { Enabled = false };
+        _estimateItem = new ToolStripMenuItem { Enabled = false };
+        _refreshItem = new ToolStripMenuItem();
+        _refreshItem.Click += (_, _) => Refresh();
+        _autoSwitchItem = new ToolStripMenuItem
         {
             Checked = Settings.AutoSwitchAudio,
             CheckOnClick = true,
         };
         _autoSwitchItem.CheckedChanged += (_, _) => Settings.AutoSwitchAudio = _autoSwitchItem.Checked;
-        _autostartItem = new ToolStripMenuItem("开机启动")
+        _autostartItem = new ToolStripMenuItem
         {
             Checked = IsAutostartEnabled(),
             CheckOnClick = true,
         };
         _autostartItem.CheckedChanged += (_, _) => SetAutostart(_autostartItem.Checked);
-        _notifyConnItem = new ToolStripMenuItem("连接/断开提示")
+        _notifyConnItem = new ToolStripMenuItem
         {
             Checked = Settings.NotifyOnConnection,
             CheckOnClick = true,
         };
         _notifyConnItem.CheckedChanged += (_, _) => Settings.NotifyOnConnection = _notifyConnItem.Checked;
 
-        _thresholdItem = new ToolStripMenuItem("低电量阈值");
+        _thresholdItem = new ToolStripMenuItem();
         foreach (int v in ThresholdOptions)
         {
             var item = new ToolStripMenuItem($"{v}%") { Tag = v, Checked = v == Settings.LowBatteryThreshold };
@@ -70,28 +82,42 @@ public sealed class TrayAppContext : ApplicationContext
             _thresholdItem.DropDownItems.Add(item);
         }
 
-        _renderFallbackItem = new ToolStripMenuItem("回切播放设备");
-        _captureFallbackItem = new ToolStripMenuItem("回切录音设备");
+        _renderFallbackItem = new ToolStripMenuItem();
+        _captureFallbackItem = new ToolStripMenuItem();
+
+        _languageItem = new ToolStripMenuItem();
+        _languageAutoItem = new ToolStripMenuItem { Tag = "auto" };
+        _languageAutoItem.Click += (_, _) => SetLanguage("auto");
+        var zhItem = new ToolStripMenuItem("中文") { Tag = "zh" };
+        zhItem.Click += (_, _) => SetLanguage("zh");
+        var enItem = new ToolStripMenuItem("English") { Tag = "en" };
+        enItem.Click += (_, _) => SetLanguage("en");
+        _languageItem.DropDownItems.Add(_languageAutoItem);
+        _languageItem.DropDownItems.Add(zhItem);
+        _languageItem.DropDownItems.Add(enItem);
+
+        _exitItem = new ToolStripMenuItem();
+        _exitItem.Click += (_, _) => Exit();
 
         _menu = new ContextMenuStrip();
         _menu.Items.Add(_statusItem);
         _menu.Items.Add(_estimateItem);
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add("立即刷新", null, (_, _) => Refresh());
+        _menu.Items.Add(_refreshItem);
         _menu.Items.Add(_thresholdItem);
         _menu.Items.Add(_notifyConnItem);
         _menu.Items.Add(_autoSwitchItem);
         _menu.Items.Add(_renderFallbackItem);
         _menu.Items.Add(_captureFallbackItem);
         _menu.Items.Add(_autostartItem);
+        _menu.Items.Add(_languageItem);
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add("退出", null, (_, _) => Exit());
+        _menu.Items.Add(_exitItem);
         // Device lists change as endpoints come and go, so rebuild them on every open.
         _menu.Opening += (_, _) => RebuildFallbackMenus();
 
         _notifyIcon = new NotifyIcon
         {
-            Text = "ROG 耳机电量",
             ContextMenuStrip = _menu,
             Visible = true,
         };
@@ -108,6 +134,8 @@ public sealed class TrayAppContext : ApplicationContext
         _ = _invoker.Handle;   // force handle creation on the UI thread
         _source.DeviceChanged += OnDeviceChanged;
 
+        ApplyTexts();
+        SetIcon(IconRenderer.Render(_currentState, Settings.LowBatteryThreshold));
         Refresh();
     }
 
@@ -121,9 +149,37 @@ public sealed class TrayAppContext : ApplicationContext
         catch (ObjectDisposedException) { }
     }
 
+    /// <summary>
+    /// Kicks off an asynchronous poll. The HID read can take several seconds when the
+    /// link is flaky (retries × read timeout), so it runs on a background thread to
+    /// keep the tray menu and balloons responsive; overlapping polls are skipped.
+    /// </summary>
     private void Refresh()
     {
-        var reading = _source.Read();
+        if (_refreshInFlight || _disposed)
+            return;
+        _refreshInFlight = true;
+        Task.Run(() =>
+        {
+            BatteryState reading;
+            try { reading = _source.Read(); }
+            catch { reading = BatteryState.Disconnected; }
+
+            try
+            {
+                _invoker.BeginInvoke(() =>
+                {
+                    _refreshInFlight = false;
+                    ApplyReading(reading);
+                });
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }   // handle gone during shutdown
+        });
+    }
+
+    private void ApplyReading(BatteryState reading)
+    {
         _lastRefreshLocal = DateTime.Now;
 
         // Debounce: a single failed poll is usually a transient link hiccup, not a
@@ -149,24 +205,27 @@ public sealed class TrayAppContext : ApplicationContext
         }
 
         if (reading is { Connected: true, Percent: { } sampled })
-            _history.Add(sampled);
+            _history.Add(sampled, reading.Charging);
 
-        _statusItem.Text = state switch
-        {
-            { Connected: true, Percent: { } p } => $"电量: {p}%" + (state.Charging ? "（充电中）" : ""),
-            { DonglePresent: true } => "耳机未开机（接收器已连接）",
-            _ => "耳机未连接",
-        };
-        _notifyIcon.Text = _statusItem.Text;
-
+        _statusItem.Text = StatusText(state);
         _estimateItem.Text = EstimateText(state);
 
-        string iconKey = state.Connected ? $"p{state.Percent}t{Settings.LowBatteryThreshold}" : "off";
+        string tip = _statusItem.Text;
+        if (state.Connected)
+            tip += "\n" + _estimateItem.Text;
+        _notifyIcon.Text = tip.Length <= 63 ? tip : tip[..63];
+
+        string iconKey = state.Connected
+            ? $"p{state.Percent}t{Settings.LowBatteryThreshold}c{state.Charging}"
+            : state.DonglePresent ? "dongle" : "off";
+        iconKey += $"s{SystemInformation.SmallIconSize.Width}";
         if (iconKey != _lastIconKey)
         {
             _lastIconKey = iconKey;
             SetIcon(IconRenderer.Render(state, Settings.LowBatteryThreshold));
         }
+
+        StatusFile.Write(state, _lastRemainingEstimate);
 
         // Poll faster while disconnected so a power-on is detected quickly.
         int interval = state.Connected ? PollIntervalMs : DisconnectedPollIntervalMs;
@@ -178,22 +237,59 @@ public sealed class TrayAppContext : ApplicationContext
         _currentState = state;
     }
 
+    private static string StatusText(BatteryState state) => state switch
+    {
+        { Connected: true, Percent: { } p } => L.StatusBattery(p, state.Charging),
+        { DonglePresent: true } => L.StatusHeadsetOff,
+        _ => L.StatusDisconnected,
+    };
+
     private string EstimateText(BatteryState state)
     {
+        _lastRemainingEstimate = null;
         if (state is not { Connected: true, Percent: { } p })
-            return "耗电速率: --";
+            return L.EstimateNone;
+
+        if (state.Charging)
+        {
+            var full = _history.EstimateTimeToFull(p);
+            return full == null ? L.EstimateCharging : L.EstimateFullIn(L.FormatDuration(full.Value));
+        }
 
         var remaining = _history.EstimateRemaining(p);
+        _lastRemainingEstimate = remaining;
         return remaining == null
-            ? "耗电速率: 数据收集中"
-            : $"预计剩余: {FormatDuration(remaining.Value)}";
+            ? L.EstimateCollecting
+            : L.EstimateRemaining(L.FormatDuration(remaining.Value));
     }
 
-    private static string FormatDuration(TimeSpan t)
+    /// <summary>Re-applies every localizable label, e.g. after the language changed.</summary>
+    private void ApplyTexts()
     {
-        if (t.TotalHours >= 1)
-            return $"{(int)t.TotalHours} 小时 {t.Minutes} 分钟";
-        return $"{Math.Max(t.Minutes, 1)} 分钟";
+        _refreshItem.Text = L.MenuRefresh;
+        _thresholdItem.Text = L.MenuThreshold;
+        _notifyConnItem.Text = L.MenuNotifyConnection;
+        _autoSwitchItem.Text = L.MenuAutoSwitch;
+        _renderFallbackItem.Text = L.MenuRenderFallback;
+        _captureFallbackItem.Text = L.MenuCaptureFallback;
+        _autostartItem.Text = L.MenuAutostart;
+        _languageItem.Text = L.MenuLanguage;
+        _languageAutoItem.Text = L.MenuLanguageAuto;
+        foreach (ToolStripMenuItem item in _languageItem.DropDownItems)
+            item.Checked = (string)item.Tag! == Settings.Language;
+        _exitItem.Text = L.MenuExit;
+
+        _statusItem.Text = StatusText(_currentState);
+        _estimateItem.Text = EstimateText(_currentState);
+        _notifyIcon.Text = _currentState.Connected
+            ? $"{_statusItem.Text}\n{_estimateItem.Text}"
+            : _statusItem.Text;
+    }
+
+    private void SetLanguage(string language)
+    {
+        Settings.Language = language;
+        ApplyTexts();
     }
 
     private void SetThreshold(int value)
@@ -232,7 +328,7 @@ public sealed class TrayAppContext : ApplicationContext
     {
         parent.DropDownItems.Clear();
 
-        var auto = new ToolStripMenuItem("自动记忆") { Checked = getFixed() == null };
+        var auto = new ToolStripMenuItem(L.MenuAutoRemember) { Checked = getFixed() == null };
         auto.Click += (_, _) => setFixed(null);
         parent.DropDownItems.Add(auto);
         parent.DropDownItems.Add(new ToolStripSeparator());
@@ -249,17 +345,15 @@ public sealed class TrayAppContext : ApplicationContext
 
     private void ShowDetails()
     {
+        string time = L.LastRefresh($"{_lastRefreshLocal:HH:mm:ss}");
         string text = _currentState switch
         {
             { Connected: true, Percent: { } p } =>
-                $"电量 {p}%" + (_currentState.Charging ? "（充电中）" : "")
-                + $"\n{_estimateItem.Text}\n上次刷新: {_lastRefreshLocal:HH:mm:ss}",
-            { DonglePresent: true } =>
-                $"耳机未开机（接收器已连接）\n上次刷新: {_lastRefreshLocal:HH:mm:ss}",
-            _ =>
-                $"耳机未连接\n上次刷新: {_lastRefreshLocal:HH:mm:ss}",
+                $"{L.DetailsBattery(p, _currentState.Charging)}\n{_estimateItem.Text}\n{time}",
+            { DonglePresent: true } => $"{L.StatusHeadsetOff}\n{time}",
+            _ => $"{L.StatusDisconnected}\n{time}",
         };
-        _notifyIcon.ShowBalloonTip(3000, "ROG 耳机电量", text, ToolTipIcon.Info);
+        _notifyIcon.ShowBalloonTip(3000, L.AppTitle, text, ToolTipIcon.Info);
     }
 
     private void HandleConnectionTransition(BatteryState state)
@@ -272,9 +366,9 @@ public sealed class TrayAppContext : ApplicationContext
         if (Settings.NotifyOnConnection)
         {
             string text = connected
-                ? state.Percent is { } p ? $"耳机已连接，电量 {p}%" : "耳机已连接"
-                : "耳机已断开";
-            _notifyIcon.ShowBalloonTip(3000, "ROG 耳机", text, ToolTipIcon.Info);
+                ? state.Percent is { } p ? L.ConnectedWithBattery(p) : L.ConnectedPlain
+                : L.Disconnected;
+            _notifyIcon.ShowBalloonTip(3000, L.HeadsetTitle, text, ToolTipIcon.Info);
         }
 
         if (!Settings.AutoSwitchAudio)
@@ -285,30 +379,76 @@ public sealed class TrayAppContext : ApplicationContext
             if (connected)
             {
                 // remember current defaults (unless the headset is already the default)
-                var (renderId, captureId) = _audio.GetDefaultIds();
+                var d = _audio.GetDefaultIds();
                 var headsetIds = _audio.EnumActiveEndpoints()
-                    .Where(e => e.Name.Contains("ROG DELTA II", StringComparison.OrdinalIgnoreCase))
+                    .Where(AudioDeviceManager.IsHeadset)
                     .Select(e => e.Id).ToHashSet();
-                if (renderId != null && !headsetIds.Contains(renderId))
-                    Settings.PrevRenderId = renderId;
-                if (captureId != null && !headsetIds.Contains(captureId))
-                    Settings.PrevCaptureId = captureId;
+                if (d.Render != null && !headsetIds.Contains(d.Render))
+                    Settings.PrevRenderId = d.Render;
+                if (d.Capture != null && !headsetIds.Contains(d.Capture))
+                    Settings.PrevCaptureId = d.Capture;
+                if (d.RenderComm != null && !headsetIds.Contains(d.RenderComm))
+                    Settings.PrevRenderCommId = d.RenderComm;
+                if (d.CaptureComm != null && !headsetIds.Contains(d.CaptureComm))
+                    Settings.PrevCaptureCommId = d.CaptureComm;
 
-                _audio.SwitchToHeadset();
+                _audioSwitchRetries = 0;
+                SwitchToHeadsetWithRetry();
             }
             else
             {
+                _audioSwitchRetries = 0;
                 // A fixed fallback device (if configured) takes precedence over the
                 // auto-remembered one.
                 _audio.SwitchToSpeakers(
                     Settings.FixedRenderId ?? Settings.PrevRenderId,
-                    Settings.FixedCaptureId ?? Settings.PrevCaptureId);
+                    Settings.FixedCaptureId ?? Settings.PrevCaptureId,
+                    Settings.PrevRenderCommId,
+                    Settings.PrevCaptureCommId);
             }
         }
         catch (Exception ex)
         {
-            _notifyIcon.ShowBalloonTip(3000, "ROG 耳机", $"切换音频设备失败：{ex.Message}", ToolTipIcon.Error);
+            _notifyIcon.ShowBalloonTip(3000, L.HeadsetTitle, L.SwitchFailed(ex.Message), ToolTipIcon.Error);
         }
+    }
+
+    /// <summary>
+    /// Right after power-on the headset's USB audio endpoints may not be registered
+    /// with Windows yet, so the first switch attempt can find nothing to switch to.
+    /// Retry a few times while the headset stays connected.
+    /// </summary>
+    private void SwitchToHeadsetWithRetry()
+    {
+        bool switched;
+        try
+        {
+            switched = _audio.SwitchToHeadset();
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon.ShowBalloonTip(3000, L.HeadsetTitle, L.SwitchFailed(ex.Message), ToolTipIcon.Error);
+            return;
+        }
+        if (switched || _audioSwitchRetries >= AudioSwitchMaxRetries)
+            return;
+
+        _audioSwitchRetries++;
+        Task.Delay(AudioSwitchRetryDelayMs).ContinueWith(_ =>
+        {
+            if (_disposed)
+                return;
+            try
+            {
+                _invoker.BeginInvoke(() =>
+                {
+                    if (_wasConnected)
+                        SwitchToHeadsetWithRetry();
+                });
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        });
     }
 
     private void HandleLowBattery(BatteryState state)
@@ -327,8 +467,8 @@ public sealed class TrayAppContext : ApplicationContext
             {
                 if (_notifiedTiers.Add(tier))
                 {
-                    _notifyIcon.ShowBalloonTip(3000, "ROG 耳机电量低",
-                        $"剩余电量 {p}%，请及时充电。", ToolTipIcon.Warning);
+                    _notifyIcon.ShowBalloonTip(3000, L.LowBatteryTitle,
+                        L.LowBatteryBody(p), ToolTipIcon.Warning);
                 }
             }
             else
@@ -372,6 +512,7 @@ public sealed class TrayAppContext : ApplicationContext
     {
         if (disposing)
         {
+            _disposed = true;
             _source.DeviceChanged -= OnDeviceChanged;
             _timer.Dispose();
             _notifyIcon.Dispose();

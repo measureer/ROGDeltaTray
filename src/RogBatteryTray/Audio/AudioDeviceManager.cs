@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using RogBatteryTray.Hid;
 
 namespace RogBatteryTray.Audio;
 
@@ -9,26 +10,46 @@ namespace RogBatteryTray.Audio;
 /// </summary>
 public sealed class AudioDeviceManager
 {
-    private const string HeadsetNamePart = "ROG DELTA II";
+    public sealed record Endpoint(string Id, string InstanceId, string Name, bool IsRender);
 
-    public sealed record Endpoint(string Id, string Name, bool IsRender);
+    /// <summary>Current default endpoint ids per role, or null where unavailable.</summary>
+    public sealed record DefaultIds(string? Render, string? Capture, string? RenderComm, string? CaptureComm);
+
+    /// <summary>
+    /// Headset endpoints are recognized by the VID/PID in their device instance id
+    /// (robust against the user renaming the device), falling back to a name match
+    /// when the instance id cannot be read.
+    /// </summary>
+    public static bool IsHeadset(Endpoint e) =>
+        (e.InstanceId.Length > 0 && SupportedDevices.InstanceIdFragments.Any(
+            f => e.InstanceId.Contains(f, StringComparison.OrdinalIgnoreCase)))
+        || SupportedDevices.NameParts.Any(
+            n => e.Name.Contains(n, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Set Windows default render + capture to the ROG headset. Returns true on success.</summary>
     public bool SwitchToHeadset() => Switch(matchHeadset: true);
 
-    /// <summary>Set Windows default render + capture back to the remembered non-headset devices.</summary>
-    public bool SwitchToSpeakers(string? renderId, string? captureId)
+    /// <summary>
+    /// Set Windows default render + capture back to the remembered non-headset devices.
+    /// The console/multimedia roles go to renderId/captureId; the communications role
+    /// goes to renderCommId/captureCommId (falling back to the console device).
+    /// </summary>
+    public bool SwitchToSpeakers(string? renderId, string? captureId, string? renderCommId, string? captureCommId)
     {
         bool ok = false;
         var endpoints = EnumActiveEndpoints();
 
         var render = endpoints.FirstOrDefault(e => e.IsRender && e.Id == renderId)
-                  ?? endpoints.FirstOrDefault(e => e.IsRender && !e.Name.Contains(HeadsetNamePart, StringComparison.OrdinalIgnoreCase));
+                  ?? endpoints.FirstOrDefault(e => e.IsRender && !IsHeadset(e));
         var capture = endpoints.FirstOrDefault(e => !e.IsRender && e.Id == captureId)
-                   ?? endpoints.FirstOrDefault(e => !e.IsRender && !e.Name.Contains(HeadsetNamePart, StringComparison.OrdinalIgnoreCase));
+                   ?? endpoints.FirstOrDefault(e => !e.IsRender && !IsHeadset(e));
+        var renderComm = endpoints.FirstOrDefault(e => e.IsRender && e.Id == renderCommId) ?? render;
+        var captureComm = endpoints.FirstOrDefault(e => !e.IsRender && e.Id == captureCommId) ?? capture;
 
-        if (render != null) ok |= SetDefault(render.Id);
-        if (capture != null) ok |= SetDefault(capture.Id);
+        if (render != null) ok |= SetDefault(render.Id, ERole.eConsole, ERole.eMultimedia);
+        if (capture != null) ok |= SetDefault(capture.Id, ERole.eConsole, ERole.eMultimedia);
+        if (renderComm != null) ok |= SetDefault(renderComm.Id, ERole.eCommunications);
+        if (captureComm != null) ok |= SetDefault(captureComm.Id, ERole.eCommunications);
         return ok;
     }
 
@@ -37,19 +58,20 @@ public sealed class AudioDeviceManager
         bool ok = false;
         foreach (var e in EnumActiveEndpoints())
         {
-            bool isHeadset = e.Name.Contains(HeadsetNamePart, StringComparison.OrdinalIgnoreCase);
-            if (isHeadset == matchHeadset)
-                ok |= SetDefault(e.Id);
+            if (IsHeadset(e) == matchHeadset)
+                ok |= SetDefault(e.Id, ERole.eConsole, ERole.eMultimedia, ERole.eCommunications);
         }
         return ok;
     }
 
-    /// <summary>Current default render/capture endpoint ids (eConsole role), or null.</summary>
-    public (string? renderId, string? captureId) GetDefaultIds()
+    /// <summary>Current default render/capture endpoint ids for the console and communications roles.</summary>
+    public DefaultIds GetDefaultIds()
     {
-        string? render = GetDefaultId(EDataFlow.eRender);
-        string? capture = GetDefaultId(EDataFlow.eCapture);
-        return (render, capture);
+        return new DefaultIds(
+            GetDefaultId(EDataFlow.eRender, ERole.eConsole),
+            GetDefaultId(EDataFlow.eCapture, ERole.eConsole),
+            GetDefaultId(EDataFlow.eRender, ERole.eCommunications),
+            GetDefaultId(EDataFlow.eCapture, ERole.eCommunications));
     }
 
     public List<Endpoint> EnumActiveEndpoints()
@@ -65,8 +87,9 @@ public sealed class AudioDeviceManager
                 collection.Item(i, out var device);
                 device.GetId(out string id);
                 device.OpenPropertyStore(0 /* STGM_READ */, out var store);
-                string name = ReadFriendlyName(store);
-                list.Add(new Endpoint(id, name, flow == EDataFlow.eRender));
+                string name = ReadString(store, PkeyDeviceFriendlyName) ?? "";
+                string instanceId = ReadString(store, DevpkeyDeviceInstanceId) ?? "";
+                list.Add(new Endpoint(id, instanceId, name, flow == EDataFlow.eRender));
                 Marshal.ReleaseComObject(store);
                 Marshal.ReleaseComObject(device);
             }
@@ -76,12 +99,12 @@ public sealed class AudioDeviceManager
         return list;
     }
 
-    private string? GetDefaultId(EDataFlow flow)
+    private string? GetDefaultId(EDataFlow flow, ERole role)
     {
         var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
         try
         {
-            int hr = enumerator.GetDefaultAudioEndpoint(flow, ERole.eConsole, out var device);
+            int hr = enumerator.GetDefaultAudioEndpoint(flow, role, out var device);
             if (hr != 0) return null;
             device.GetId(out string id);
             Marshal.ReleaseComObject(device);
@@ -90,24 +113,30 @@ public sealed class AudioDeviceManager
         finally { Marshal.ReleaseComObject(enumerator); }
     }
 
-    private static bool SetDefault(string deviceId)
+    private static bool SetDefault(string deviceId, params ERole[] roles)
     {
         var policy = (IPolicyConfig)new PolicyConfigClient();
         int hr = 0;
-        foreach (var role in new[] { ERole.eConsole, ERole.eMultimedia, ERole.eCommunications })
+        foreach (var role in roles)
             hr |= policy.SetDefaultEndpoint(deviceId, role);
         Marshal.ReleaseComObject(policy);
         return hr == 0;
     }
 
-    private static string ReadFriendlyName(IPropertyStore store)
+    // PKEY_Device_FriendlyName
+    private static readonly PropertyKey PkeyDeviceFriendlyName =
+        new(new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), 14);
+
+    // DEVPKEY_Device_InstanceId — contains e.g. "USB\VID_0B05&PID_1AFA\..."
+    private static readonly PropertyKey DevpkeyDeviceInstanceId =
+        new(new Guid("78c34fc8-104a-4aca-9ea4-524d52996e57"), 256);
+
+    private static string? ReadString(IPropertyStore store, PropertyKey key)
     {
-        // PKEY_Device_FriendlyName {a45c254e-df1c-4efd-8020-67d146a850e0}, 14
-        var key = new PropertyKey(new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), 14);
         store.GetValue(ref key, out PropVariant value);
-        string name = value.StringValue ?? "";
+        string? result = value.StringValue;
         value.Clear();
-        return name;
+        return result;
     }
 
     // ---------------- COM interop ----------------
@@ -163,7 +192,7 @@ public sealed class AudioDeviceManager
         [PreserveSig] int SetDeviceFormat(string pszDeviceName, IntPtr pEndpointFormat, IntPtr mixFormat);
         [PreserveSig] int GetProcessingPeriod(string pszDeviceName, bool bDefault, IntPtr pmftDefaultPeriod, IntPtr pmftMinimumPeriod);
         [PreserveSig] int SetProcessingPeriod(string pszDeviceName, IntPtr pmftPeriod);
-        [PreserveSig] int GetShareMode(string pszDeviceName, IntPtr pMode);
+        [PreserveSig] int GetShareMode(string pszDeviceName, bool bExclusive, IntPtr pMode);
         [PreserveSig] int SetShareMode(string pszDeviceName, IntPtr mode);
         [PreserveSig] int GetPropertyValue(string pszDeviceName, bool bFxStore, IntPtr key, IntPtr pv);
         [PreserveSig] int SetPropertyValue(string pszDeviceName, bool bFxStore, IntPtr key, IntPtr pv);
