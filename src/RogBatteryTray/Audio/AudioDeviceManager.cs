@@ -78,24 +78,36 @@ public sealed class AudioDeviceManager
     {
         var list = new List<Endpoint>();
         var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
-        foreach (var flow in new[] { EDataFlow.eRender, EDataFlow.eCapture })
+        try
         {
-            enumerator.EnumAudioEndpoints(flow, 0x1 /* DEVICE_STATE_ACTIVE */, out var collection);
-            collection.GetCount(out uint count);
-            for (uint i = 0; i < count; i++)
+            foreach (var flow in new[] { EDataFlow.eRender, EDataFlow.eCapture })
             {
-                collection.Item(i, out var device);
-                device.GetId(out string id);
-                device.OpenPropertyStore(0 /* STGM_READ */, out var store);
-                string name = ReadString(store, PkeyDeviceFriendlyName) ?? "";
-                string instanceId = ReadString(store, DevpkeyDeviceInstanceId) ?? "";
-                list.Add(new Endpoint(id, instanceId, name, flow == EDataFlow.eRender));
-                Marshal.ReleaseComObject(store);
-                Marshal.ReleaseComObject(device);
+                enumerator.EnumAudioEndpoints(flow, 0x1 /* DEVICE_STATE_ACTIVE */, out var collection);
+                try
+                {
+                    collection.GetCount(out uint count);
+                    for (uint i = 0; i < count; i++)
+                    {
+                        collection.Item(i, out var device);
+                        try
+                        {
+                            device.GetId(out string id);
+                            device.OpenPropertyStore(0 /* STGM_READ */, out var store);
+                            try
+                            {
+                                string name = ReadString(store, PkeyDeviceFriendlyName) ?? "";
+                                string instanceId = ReadString(store, DevpkeyDeviceInstanceId) ?? "";
+                                list.Add(new Endpoint(id, instanceId, name, flow == EDataFlow.eRender));
+                            }
+                            finally { Marshal.ReleaseComObject(store); }
+                        }
+                        finally { Marshal.ReleaseComObject(device); }
+                    }
+                }
+                finally { Marshal.ReleaseComObject(collection); }
             }
-            Marshal.ReleaseComObject(collection);
         }
-        Marshal.ReleaseComObject(enumerator);
+        finally { Marshal.ReleaseComObject(enumerator); }
         return list;
     }
 
@@ -106,9 +118,12 @@ public sealed class AudioDeviceManager
         {
             int hr = enumerator.GetDefaultAudioEndpoint(flow, role, out var device);
             if (hr != 0) return null;
-            device.GetId(out string id);
-            Marshal.ReleaseComObject(device);
-            return id;
+            try
+            {
+                device.GetId(out string id);
+                return id;
+            }
+            finally { Marshal.ReleaseComObject(device); }
         }
         finally { Marshal.ReleaseComObject(enumerator); }
     }
@@ -116,11 +131,14 @@ public sealed class AudioDeviceManager
     private static bool SetDefault(string deviceId, params ERole[] roles)
     {
         var policy = (IPolicyConfig)new PolicyConfigClient();
-        int hr = 0;
-        foreach (var role in roles)
-            hr |= policy.SetDefaultEndpoint(deviceId, role);
-        Marshal.ReleaseComObject(policy);
-        return hr == 0;
+        try
+        {
+            int hr = 0;
+            foreach (var role in roles)
+                hr |= policy.SetDefaultEndpoint(deviceId, role);
+            return hr == 0;
+        }
+        finally { Marshal.ReleaseComObject(policy); }
     }
 
     // PKEY_Device_FriendlyName

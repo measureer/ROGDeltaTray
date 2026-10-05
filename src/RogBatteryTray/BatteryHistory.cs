@@ -10,9 +10,9 @@ namespace RogBatteryTray;
 /// </summary>
 public sealed class BatteryHistory
 {
-    private sealed record Sample(DateTime Utc, int Percent, bool Charging);
+    internal sealed record Sample(DateTime Utc, int Percent, bool Charging);
 
-    private static readonly string FilePath = Path.Combine(
+    internal static readonly string DefaultFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "RogBatteryTray", "history.json");
 
@@ -23,11 +23,19 @@ public sealed class BatteryHistory
     private static readonly TimeSpan MinChargeEstimateSpan = TimeSpan.FromMinutes(5);
     private const int MaxSamples = 2000;
 
+    private readonly string _filePath;
     private readonly List<Sample> _samples;
 
-    public BatteryHistory()
+    internal int SampleCount => _samples.Count;
+
+    public BatteryHistory() : this(DefaultFilePath, Load(DefaultFilePath))
     {
-        _samples = Load();
+    }
+
+    internal BatteryHistory(string filePath, List<Sample> samples)
+    {
+        _filePath = filePath;
+        _samples = samples;
     }
 
     /// <summary>Record a reading; writes to disk only when the sample list changed.</summary>
@@ -50,9 +58,12 @@ public sealed class BatteryHistory
     /// Samples from before the last charge session are ignored, so a charge inside
     /// the window doesn't flatten the measured drain rate.
     /// </summary>
-    public TimeSpan? EstimateRemaining(int currentPercent)
+    public TimeSpan? EstimateRemaining(int currentPercent) =>
+        EstimateRemaining(currentPercent, DateTime.UtcNow);
+
+    internal TimeSpan? EstimateRemaining(int currentPercent, DateTime now)
     {
-        var cutoff = DateTime.UtcNow - EstimateWindow;
+        var cutoff = now - EstimateWindow;
         var window = _samples.Where(s => s.Utc >= cutoff).ToList();
 
         int lastCharge = window.FindLastIndex(s => s.Charging);
@@ -61,13 +72,13 @@ public sealed class BatteryHistory
         if (window.Count < 2)
             return null;
 
-        var first = window[0];
-        var last = window[^1];
-        double hours = (last.Utc - first.Utc).TotalHours;
-        if (hours < MinEstimateSpan.TotalHours)
+        double spanHours = (window[^1].Utc - window[0].Utc).TotalHours;
+        if (spanHours < MinEstimateSpan.TotalHours)
             return null;
 
-        double dropPerHour = (first.Percent - last.Percent) / hours;
+        // Least-squares slope over the whole window: endpoint-only differencing is
+        // too sensitive to the ±1% quantization noise of individual samples.
+        double dropPerHour = -SlopePerHour(window);
         if (dropPerHour <= 0.5)   // charging or nearly idle: estimate not meaningful
             return null;
 
@@ -87,17 +98,33 @@ public sealed class BatteryHistory
         if (run.Count < 2)
             return null;
 
-        var first = run[0];
-        var last = run[^1];
-        double hours = (last.Utc - first.Utc).TotalHours;
-        if (hours < MinChargeEstimateSpan.TotalHours)
+        double spanHours = (run[^1].Utc - run[0].Utc).TotalHours;
+        if (spanHours < MinChargeEstimateSpan.TotalHours)
             return null;
 
-        double risePerHour = (last.Percent - first.Percent) / hours;
+        double risePerHour = SlopePerHour(run);
         if (risePerHour <= 0.5)
             return null;
 
         return TimeSpan.FromHours((100 - currentPercent) / risePerHour);
+    }
+
+    /// <summary>Least-squares trend of percent per hour over the samples.</summary>
+    private static double SlopePerHour(List<Sample> samples)
+    {
+        double t0 = samples[0].Utc.Ticks;
+        var hours = samples.Select(s => (s.Utc.Ticks - t0) / (double)TimeSpan.TicksPerHour).ToArray();
+        double tMean = hours.Average();
+        double pMean = samples.Average(s => (double)s.Percent);
+
+        double num = 0, den = 0;
+        for (int i = 0; i < samples.Count; i++)
+        {
+            double dt = hours[i] - tMean;
+            num += dt * (samples[i].Percent - pMean);
+            den += dt * dt;
+        }
+        return den > 0 ? num / den : 0;
     }
 
     private void Prune(DateTime now)
@@ -108,13 +135,13 @@ public sealed class BatteryHistory
             _samples.RemoveRange(0, _samples.Count - MaxSamples);
     }
 
-    private static List<Sample> Load()
+    private static List<Sample> Load(string filePath)
     {
         try
         {
-            if (File.Exists(FilePath))
+            if (File.Exists(filePath))
             {
-                var samples = JsonSerializer.Deserialize<List<Sample>>(File.ReadAllText(FilePath));
+                var samples = JsonSerializer.Deserialize<List<Sample>>(File.ReadAllText(filePath));
                 if (samples != null)
                     return samples;
             }
@@ -127,8 +154,12 @@ public sealed class BatteryHistory
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(_samples));
+            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+            // Write to a temp file and swap atomically, so a crash mid-write can't
+            // truncate the previous good history.
+            string tmp = _filePath + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(_samples));
+            File.Move(tmp, _filePath, overwrite: true);
         }
         catch { /* history is best-effort; never break polling over it */ }
     }

@@ -35,6 +35,7 @@ public sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _languageAutoItem;
     private readonly ToolStripMenuItem _exitItem;
     private readonly HashSet<int> _notifiedTiers = new();
+    private int _lowThreshold = Settings.LowBatteryThreshold;   // cached: avoids a registry read on every poll
     private Icon? _currentIcon;
     private bool _wasConnected;
     private string? _lastIconKey;
@@ -135,7 +136,7 @@ public sealed class TrayAppContext : ApplicationContext
         _source.DeviceChanged += OnDeviceChanged;
 
         ApplyTexts();
-        SetIcon(IconRenderer.Render(_currentState, Settings.LowBatteryThreshold));
+        SetIcon(IconRenderer.Render(_currentState, _lowThreshold));
         Refresh();
     }
 
@@ -173,8 +174,8 @@ public sealed class TrayAppContext : ApplicationContext
                     ApplyReading(reading);
                 });
             }
-            catch (ObjectDisposedException) { }
-            catch (InvalidOperationException) { }   // handle gone during shutdown
+            catch (ObjectDisposedException) { _refreshInFlight = false; }
+            catch (InvalidOperationException) { _refreshInFlight = false; }   // handle gone during shutdown
         });
     }
 
@@ -216,13 +217,13 @@ public sealed class TrayAppContext : ApplicationContext
         _notifyIcon.Text = tip.Length <= 63 ? tip : tip[..63];
 
         string iconKey = state.Connected
-            ? $"p{state.Percent}t{Settings.LowBatteryThreshold}c{state.Charging}"
+            ? $"p{state.Percent}t{_lowThreshold}c{state.Charging}"
             : state.DonglePresent ? "dongle" : "off";
         iconKey += $"s{SystemInformation.SmallIconSize.Width}";
         if (iconKey != _lastIconKey)
         {
             _lastIconKey = iconKey;
-            SetIcon(IconRenderer.Render(state, Settings.LowBatteryThreshold));
+            SetIcon(IconRenderer.Render(state, _lowThreshold));
         }
 
         StatusFile.Write(state, _lastRemainingEstimate);
@@ -295,6 +296,7 @@ public sealed class TrayAppContext : ApplicationContext
     private void SetThreshold(int value)
     {
         Settings.LowBatteryThreshold = value;
+        _lowThreshold = value;
         foreach (ToolStripMenuItem item in _thresholdItem.DropDownItems)
             item.Checked = (int)item.Tag! == value;
         _notifiedTiers.Clear();
@@ -461,7 +463,7 @@ public sealed class TrayAppContext : ApplicationContext
 
         // Tiered alerts: one notification per tier crossed; a tier re-arms once
         // the battery rises back above it (e.g. after charging).
-        foreach (int tier in new[] { Settings.LowBatteryThreshold, 10, 5 }.Distinct().OrderByDescending(t => t))
+        foreach (int tier in new[] { _lowThreshold, 10, 5 }.Distinct().OrderByDescending(t => t))
         {
             if (p <= tier)
             {

@@ -22,8 +22,9 @@ public static class IconRenderer
         // 32px, so Windows doesn't have to rescale the icon itself.
         int target = Math.Clamp(SystemInformation.SmallIconSize.Width, 16, 64);
 
-        // Supersample at 4x, then downscale — much smoother edges at tray size.
-        using var big = RenderBitmap(state, lowThreshold, 128);
+        // Supersample at 4x the target size, then downscale — much smoother edges
+        // at tray size.
+        using var big = RenderBitmap(state, lowThreshold, target * 4);
         using var small = new Bitmap(target, target);
         using (var g = Graphics.FromImage(small))
         {

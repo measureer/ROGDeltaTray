@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using RogBatteryTray.Hid;
 using RogBatteryTray.Tray;
 
@@ -42,16 +43,22 @@ internal static class Program
         {
             using var source = new HidBatterySource();
             var state = source.Read();
-            var payload = new
-            {
+            // Same payload shape as status.json; null fields are omitted so the CLI
+            // output stays a compact 5-field object.
+            var payload = new StatusFile.StatusPayload(
                 state.Connected,
                 state.Percent,
                 state.Charging,
                 state.DonglePresent,
                 state.HeadsetOff,
-            };
+                null,
+                null);
             Console.WriteLine(JsonSerializer.Serialize(payload,
-                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                }));
             Console.Out.Flush();
             return state.Connected ? 0 : 2;
         }

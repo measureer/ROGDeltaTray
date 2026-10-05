@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using RogBatteryTray.Hid;
 
 namespace RogBatteryTray;
@@ -10,13 +11,28 @@ namespace RogBatteryTray;
 /// </summary>
 public static class StatusFile
 {
+    /// <summary>
+    /// JSON shape shared by status.json and the --query CLI output. Null fields are
+    /// omitted when serialized with <see cref="JsonIgnoreCondition.WhenWritingNull"/>,
+    /// so --query keeps its compact 5-field output.
+    /// </summary>
+    internal sealed record StatusPayload(
+        bool Connected,
+        int? Percent,
+        bool Charging,
+        bool DonglePresent,
+        bool HeadsetOff,
+        int? EstimatedRemainingMinutes,
+        string? UpdatedAt);
+
     public static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "RogBatteryTray", "status.json");
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = true,
     };
 
@@ -34,16 +50,14 @@ public static class StatusFile
         if (signature == _lastSignature)
             return;
 
-        var payload = new
-        {
+        var payload = new StatusPayload(
             state.Connected,
             state.Percent,
             state.Charging,
             state.DonglePresent,
             state.HeadsetOff,
-            EstimatedRemainingMinutes = remainingMinutes,
-            UpdatedAt = DateTime.UtcNow.ToString("o"),
-        };
+            remainingMinutes,
+            DateTime.UtcNow.ToString("o"));
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);

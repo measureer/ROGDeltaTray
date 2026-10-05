@@ -20,7 +20,9 @@ public sealed class HidBatterySource : IBatterySource
     private const byte ReportId = 0xCC;
     private const int VendorUsagePage = 0xFF00;
     private const int ResponsePercentOffset = 6;
+    private const int ResponseChargingOffset = 5;
     private const int MaxAttempts = 3;
+    private const int MaxDrainReads = 32;   // cap so a receiver flooding async events can't spin forever
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(300);
 
     private readonly object _sync = new();
@@ -76,7 +78,7 @@ public sealed class HidBatterySource : IBatterySource
             bool charging = false;
             var (chargeResponse, _) = WriteForResponse(0x12, 0x08);
             if (chargeResponse != null)
-                charging = chargeResponse[5] == 1;
+                charging = chargeResponse[ResponseChargingOffset] == 1;
 
             return new BatteryState(percent, charging, Connected: true, DonglePresent: true, HeadsetOff: false);
         }
@@ -135,10 +137,10 @@ public sealed class HidBatterySource : IBatterySource
         try
         {
             var buf = new byte[64];
-            while (true)
+            for (int i = 0; i < MaxDrainReads; i++)
             {
                 try { stream.Read(buf, 0, buf.Length); }
-                catch { break; }
+                catch { break; }   // read timeout: queue is empty
             }
         }
         finally
@@ -200,10 +202,11 @@ public sealed class HidBatterySource : IBatterySource
 
     private void OnDeviceListChanged(object? sender, DeviceListChangedEventArgs e)
     {
-        bool present;
+        // Enumerate outside the lock: Read() can hold _sync for seconds while it
+        // retries HID I/O, and this handler runs on HidSharp's watcher thread.
+        bool present = IsDonglePresent();
         lock (_sync)
         {
-            present = IsDonglePresent();
             if (present == _lastDonglePresent)
                 return;   // some other HID device came or went — not ours
             _lastDonglePresent = present;
