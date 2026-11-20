@@ -69,11 +69,15 @@ public static class Settings
         set => Set("PrevCaptureCommId", value);
     }
 
+    private static string? _language;
+
     /// <summary>UI language: "auto" (follow Windows), "zh", or "en".</summary>
+    /// <remarks>Cached in memory: <see cref="L"/> evaluates this for every UI
+    /// string, which would otherwise open the registry several times per poll.</remarks>
     public static string Language
     {
-        get => Get("Language", "auto") ?? "auto";
-        set => Set("Language", value);
+        get => _language ??= Get("Language", "auto") ?? "auto";
+        set { Set("Language", value); _language = value; }
     }
 
     private static string? Get(string name, string? fallback)

@@ -23,7 +23,6 @@ public static class L
     public static string StatusBattery(int p, bool charging) =>
         English ? $"Battery: {p}%" + (charging ? " (charging)" : "")
                 : $"电量: {p}%" + (charging ? "（充电中）" : "");
-    public static string StatusBatteryUnknown => English ? "Battery: --" : "电量: --";
     public static string StatusHeadsetOff =>
         English ? "Headset off (receiver connected)" : "耳机未开机（接收器已连接）";
     public static string StatusDisconnected => English ? "Headset not connected" : "耳机未连接";

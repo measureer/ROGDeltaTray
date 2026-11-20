@@ -10,6 +10,8 @@ using HidSharp;
 //   hidprobe query <hexBytes> [pathPart]   write output report, then read input reports for 2s
 //   hidprobe race <hexRacePacket>          RACE request on COL02: write [06][len][packet],
 //                                          then poll GetInputReport(0x07) like Airoha tools do
+//   hidprobe racelisten [sec] [repId] [p]  continuously poll GetInputReport on COL02
+//   hidprobe racescan <startHex> <endHex>   probe a range of RACE cmd ids (type 0x5A)
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -18,7 +20,7 @@ const int Pid = 0x1AFA;
 
 if (args.Length == 0)
 {
-    Console.WriteLine("usage: hidprobe <list|listen|feature|query> ...");
+    Console.WriteLine("usage: hidprobe <list|listen|feature|query|race|racelisten|racescan> ...");
     return 1;
 }
 

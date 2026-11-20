@@ -9,7 +9,8 @@
     <RootNamespace>RogBatteryTray</RootNamespace>
     <AssemblyName>RogBatteryTray</AssemblyName>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <AssemblyVersion>0.4.1</AssemblyVersion>
+    <Version>0.4.2</Version>
+    <AssemblyVersion>0.4.2</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>

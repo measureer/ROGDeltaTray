@@ -11,9 +11,11 @@ public static class SupportedDevices
     /// </summary>
     public static readonly int[] Pids = { 0x1AFA, 0x1AD3 };
 
-    /// <summary>Fragments matched against audio endpoint instance ids (e.g. "VID_0B05&amp;PID_1AFA").</summary>
-    public static IEnumerable<string> InstanceIdFragments =>
-        Pids.Select(pid => $"VID_{Vid:X4}&PID_{pid:X4}");
+    /// <summary>Fragments matched against audio endpoint instance ids (e.g. "VID_0B05&amp;PID_1AFA").
+    /// Cached once: <see cref="Audio.AudioDeviceManager.IsHeadset"/> matches these
+    /// against every enumerated endpoint.</summary>
+    public static readonly string[] InstanceIdFragments =
+        Pids.Select(pid => $"VID_{Vid:X4}&PID_{pid:X4}").ToArray();
 
     /// <summary>Name substrings used as a fallback when an endpoint's instance id can't be read.</summary>
     public static readonly string[] NameParts = { "ROG DELTA II", "ROG CETRA" };

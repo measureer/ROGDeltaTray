@@ -53,8 +53,8 @@ As a bonus, it also fixes a daily annoyance: **automatically switching the Windo
 ## 下载与使用 / Download & Usage
 
 1. 到 [Releases](https://github.com/measureer/ROGDeltaTray/releases) 页面下载，二选一：
-   - `ROGDeltaTray-v0.4.0-win-x64.exe` — **单文件自包含版（推荐）**，无需安装 .NET 运行时
-   - `ROGDeltaTray-v0.4.0-win-x64-framework-dependent.exe` — 框架依赖版，体积小，但需要系统已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
+   - `ROGDeltaTray-v0.4.2-win-x64.exe` — **单文件自包含版（推荐）**，无需安装 .NET 运行时
+   - `ROGDeltaTray-v0.4.2-win-x64-framework-dependent.exe` — 框架依赖版，体积小，但需要系统已安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)
 2. 双击运行即可，建议配合右键菜单里的「开机启动」使用
 
 Download one of the exes from [Releases](https://github.com/measureer/ROGDeltaTray/releases): `...-win-x64.exe` is self-contained (recommended, no .NET install needed); `...-framework-dependent.exe` is smaller but requires the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0). Double-click to run — enabling "开机启动" (auto-start) from the tray menu is recommended.

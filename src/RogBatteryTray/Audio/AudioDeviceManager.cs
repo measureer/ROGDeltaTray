@@ -67,11 +67,17 @@ public sealed class AudioDeviceManager
     /// <summary>Current default render/capture endpoint ids for the console and communications roles.</summary>
     public DefaultIds GetDefaultIds()
     {
-        return new DefaultIds(
-            GetDefaultId(EDataFlow.eRender, ERole.eConsole),
-            GetDefaultId(EDataFlow.eCapture, ERole.eConsole),
-            GetDefaultId(EDataFlow.eRender, ERole.eCommunications),
-            GetDefaultId(EDataFlow.eCapture, ERole.eCommunications));
+        // One COM enumerator for all four lookups instead of one activation per role.
+        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
+        try
+        {
+            return new DefaultIds(
+                GetDefaultId(enumerator, EDataFlow.eRender, ERole.eConsole),
+                GetDefaultId(enumerator, EDataFlow.eCapture, ERole.eConsole),
+                GetDefaultId(enumerator, EDataFlow.eRender, ERole.eCommunications),
+                GetDefaultId(enumerator, EDataFlow.eCapture, ERole.eCommunications));
+        }
+        finally { Marshal.ReleaseComObject(enumerator); }
     }
 
     public List<Endpoint> EnumActiveEndpoints()
@@ -111,21 +117,16 @@ public sealed class AudioDeviceManager
         return list;
     }
 
-    private string? GetDefaultId(EDataFlow flow, ERole role)
+    private static string? GetDefaultId(IMMDeviceEnumerator enumerator, EDataFlow flow, ERole role)
     {
-        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
+        int hr = enumerator.GetDefaultAudioEndpoint(flow, role, out var device);
+        if (hr != 0) return null;
         try
         {
-            int hr = enumerator.GetDefaultAudioEndpoint(flow, role, out var device);
-            if (hr != 0) return null;
-            try
-            {
-                device.GetId(out string id);
-                return id;
-            }
-            finally { Marshal.ReleaseComObject(device); }
+            device.GetId(out string id);
+            return id;
         }
-        finally { Marshal.ReleaseComObject(enumerator); }
+        finally { Marshal.ReleaseComObject(device); }
     }
 
     private static bool SetDefault(string deviceId, params ERole[] roles)

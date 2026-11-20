@@ -7,7 +7,7 @@ var states = new (string Label, BatteryState State)[]
 {
     ("85%", new BatteryState(85, false, true, true, false)),
     ("29%", new BatteryState(29, false, true, true, false)),
-    ("15% low", new BatteryState(15, false, true, true, true)),
+    ("15% low", new BatteryState(15, false, true, true, false)),
     ("100%", new BatteryState(100, false, true, true, false)),
     ("charging", new BatteryState(45, true, true, true, false)),
     ("offline", BatteryState.Disconnected),
@@ -34,5 +34,6 @@ for (int i = 0; i < states.Length; i++)
     using var s16 = IconRenderer.RenderBitmap(states[i].State, 20, 16);
     g.DrawImage(s16, i * cell + 60, cell + labelH + 12, 16, 16);
 }
-sheet.Save("C:/Code/icon_preview.png");
-Console.WriteLine("saved");
+string outPath = args.Length > 0 ? args[0] : "icon_preview.png";
+sheet.Save(outPath);
+Console.WriteLine($"saved: {Path.GetFullPath(outPath)}");

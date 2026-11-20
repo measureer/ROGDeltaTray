@@ -282,9 +282,10 @@ public sealed class TrayAppContext : ApplicationContext
 
         _statusItem.Text = StatusText(_currentState);
         _estimateItem.Text = EstimateText(_currentState);
-        _notifyIcon.Text = _currentState.Connected
-            ? $"{_statusItem.Text}\n{_estimateItem.Text}"
-            : _statusItem.Text;
+        string tip = _statusItem.Text;
+        if (_currentState.Connected)
+            tip += "\n" + _estimateItem.Text;
+        _notifyIcon.Text = tip.Length <= 63 ? tip : tip[..63];   // same clamp as ApplyReading
     }
 
     private void SetLanguage(string language)
@@ -482,24 +483,31 @@ public sealed class TrayAppContext : ApplicationContext
 
     private void SetIcon(Icon icon)
     {
-        _currentIcon?.Dispose();
+        // Assign first and dispose the old icon afterwards: if the tray repaints
+        // in between, a destroyed HICON would briefly render blank.
+        Icon? old = _currentIcon;
         _currentIcon = icon;
         _notifyIcon.Icon = icon;
+        old?.Dispose();
     }
 
     private static bool IsAutostartEnabled()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath);
+        // Trim the quotes written by SetAutostart (and accept legacy unquoted
+        // values) so the check works either way.
         return key?.GetValue(RunValueName) is string path &&
-               string.Equals(path, Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
+               string.Equals(path.Trim('"'), Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void SetAutostart(bool enable)
     {
         using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
         if (key == null) return;
+        // Quoted: an exe path containing spaces would otherwise not survive
+        // the Run key's CreateProcess parsing.
         if (enable)
-            key.SetValue(RunValueName, Application.ExecutablePath);
+            key.SetValue(RunValueName, $"\"{Application.ExecutablePath}\"");
         else
             key.DeleteValue(RunValueName, throwOnMissingValue: false);
     }
